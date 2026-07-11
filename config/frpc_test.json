@@ -1,0 +1,17 @@
+{
+  "server_addr": "127.0.0.1",
+  "server_port": 17000,
+  "log_level": "info",
+  "auth_token": "test-token-123",
+  "client_name": "test-client-01",
+  "proxies": [
+    {
+      "name": "web",
+      "type": "tcp",
+      "local_ip": "127.0.0.1",
+      "local_port": 8080,
+      "remote_port": 17080,
+      "enabled": true
+    }
+  ]
+}

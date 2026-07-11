@@ -1,0 +1,12 @@
+{
+  "bind_port": 17000,
+  "bind_addr": "127.0.0.1",
+  "log_level": "info",
+  "auth_token": "test-token-123",
+  "max_connections": 1000,
+  "idle_timeout": 300,
+  "tls": false,
+  "webapi_port": 17501,
+  "webapi_addr": "127.0.0.1",
+  "allow_ports": "17000-18000,30000-40000"
+}

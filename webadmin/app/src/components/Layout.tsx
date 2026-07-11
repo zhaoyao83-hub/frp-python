@@ -14,6 +14,7 @@ import {
   ApartmentOutlined,
   SwapOutlined,
   FolderOpenOutlined,
+  DesktopOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
@@ -97,6 +98,7 @@ const Layout: React.FC = () => {
     },
     { key: '/users', icon: <UserOutlined />, label: '用户管理', role: 'admin' as const },
     { key: '/files', icon: <FolderOpenOutlined />, label: '文件管理', role: 'admin' as const },
+    { key: '/remote', icon: <DesktopOutlined />, label: '远程管理', role: 'admin' as const },
   ];
 
   // 根据当前路径计算选中与展开的菜单

@@ -29,6 +29,7 @@ from .routes.files import router as files_router
 from .routes.monitor import router as monitor_router
 from .routes.proxies import router as proxies_router
 from .routes.service import router as service_router
+from .routes.remote import router as remote_router
 
 # 项目根目录（webadmin/api/app.py 的上三级）
 APP_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -196,6 +197,7 @@ def create_app(config_path: str = "config/webadmin.json") -> FastAPI:
     app.include_router(monitor_router)
     app.include_router(proxies_router)
     app.include_router(files_router)
+    app.include_router(remote_router)
 
     # 挂载静态文件（若 webadmin/app/dist 存在）
     web_dist = os.path.join(APP_PROJECT_ROOT, "webadmin", "app", "dist")

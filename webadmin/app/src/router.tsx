@@ -13,6 +13,7 @@ import MonitorProxies from './pages/MonitorProxies';
 import PortMapping from './pages/PortMapping';
 import Users from './pages/Users';
 import FileManager from './pages/FileManager';
+import RemoteManagement from './pages/RemoteManagement';
 
 // 登录守卫：无 token 跳 /login
 const ProtectedLayout: React.FC = () => {
@@ -40,6 +41,7 @@ const AppRoutes: React.FC = () => {
         <Route path="monitor/proxies" element={<MonitorProxies />} />
         <Route path="users" element={<Users />} />
         <Route path="files" element={<FileManager />} />
+        <Route path="remote" element={<RemoteManagement />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

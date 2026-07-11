@@ -28,6 +28,9 @@ class MessageType:
     # FTP
     FTP_NEW_DATA = "ftp_new_data"
     FTP_DATA_READY = "ftp_data_ready"
+    # Remote management
+    REMOTE_CMD = "remote_cmd"
+    REMOTE_CMD_RESP = "remote_cmd_resp"
 
 
 # String type <-> numeric code mapping for binary framing
@@ -53,6 +56,8 @@ _TYPE_TO_CODE = {
     MessageType.STCP_VISITOR_READY: 0x13,
     MessageType.FTP_NEW_DATA: 0x14,
     MessageType.FTP_DATA_READY: 0x15,
+    MessageType.REMOTE_CMD: 0x16,
+    MessageType.REMOTE_CMD_RESP: 0x17,
 }
 _CODE_TO_TYPE = {v: k for k, v in _TYPE_TO_CODE.items()}
 

@@ -299,6 +299,17 @@ class FRPServer:
                 "data_writer": None,
                 "addr": addr,
                 "proxies": set(),
+                "client_name": message.payload.get("client_name", ""),
+                "hostname": message.payload.get("hostname", ""),
+                "os": message.payload.get("os", ""),
+                "os_version": message.payload.get("os_version", ""),
+                "arch": message.payload.get("arch", ""),
+                "python_version": message.payload.get("python_version", ""),
+                "client_version": message.payload.get("client_version", ""),
+                "login_time": time.time(),
+                "last_heartbeat": time.time(),
+                "pending_cmds": {},  # cmd_id -> asyncio.Event
+                "cmd_results": {},  # cmd_id -> result dict
             }
             self.sessions[session_id] = session
             resp = Message(
@@ -325,7 +336,7 @@ class FRPServer:
             elif message.type == MessageType.INIT_CONN:
                 await self.handle_init_conn(message, writer, session)
             elif message.type == MessageType.PING:
-                await self.handle_ping(writer)
+                await self.handle_ping(writer, session)
             elif message.type == MessageType.DATA:
                 await self.handle_data(message, writer)
             elif message.type == MessageType.CLOSE:
@@ -336,6 +347,8 @@ class FRPServer:
                 await self.handle_stcp_visitor_ready(message, writer, session)
             elif message.type == MessageType.FTP_DATA_READY:
                 await self.handle_ftp_data_ready(message, writer, session)
+            elif message.type == MessageType.REMOTE_CMD_RESP:
+                await self.handle_remote_cmd_resp(message, session)
             else:
                 self.logger.warning(f"Unknown message type: {message.type}")
         except Exception as e:
@@ -1583,13 +1596,90 @@ class FRPServer:
         else:
             data_info["buffer"] = data_info.get("buffer", b"") + data
 
-    async def handle_ping(self, writer):
+    async def handle_ping(self, writer, session=None):
+        if session:
+            session["last_heartbeat"] = time.time()
         pong_msg = Message(MessageType.PONG)
         try:
             writer.write(Protocol.encode(pong_msg))
             await writer.drain()
         except:
             pass
+
+    async def handle_remote_cmd_resp(self, message, session=None):
+        """处理客户端返回的远程命令响应。"""
+        if not session:
+            return
+        cmd_id = message.payload.get("cmd_id", "")
+        if not cmd_id:
+            return
+
+        result = dict(message.payload)
+        session["cmd_results"][cmd_id] = result
+
+        event = session["pending_cmds"].pop(cmd_id, None)
+        if event:
+            event.set()
+
+    async def send_remote_cmd(self, session_id, cmd, args=None, timeout=30):
+        """向指定客户端发送远程命令并等待响应。"""
+        session = self.sessions.get(session_id)
+        if not session:
+            return {"success": False, "error": "Client not found"}
+
+        writer = session.get("control_writer")
+        if not writer or writer.is_closing():
+            return {"success": False, "error": "Client disconnected"}
+
+        import uuid as _uuid
+        cmd_id = str(_uuid.uuid4())
+
+        event = asyncio.Event()
+        session["pending_cmds"][cmd_id] = event
+
+        try:
+            cmd_msg = Message(
+                MessageType.REMOTE_CMD,
+                cmd_id=cmd_id,
+                cmd=cmd,
+                args=args or {},
+            )
+            writer.write(Protocol.encode(cmd_msg))
+            await writer.drain()
+        except Exception as e:
+            session["pending_cmds"].pop(cmd_id, None)
+            return {"success": False, "error": f"Failed to send command: {e}"}
+
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            session["pending_cmds"].pop(cmd_id, None)
+            session["cmd_results"].pop(cmd_id, None)
+            return {"success": False, "error": "Command timeout"}
+
+        result = session["cmd_results"].pop(cmd_id, None)
+        return result if result else {"success": False, "error": "No response"}
+
+    def list_clients(self):
+        """列出所有已连接客户端。"""
+        clients = []
+        for session_id, session in self.sessions.items():
+            addr = session.get("addr")
+            ip = addr[0] if addr else "unknown"
+            clients.append({
+                "session_id": session_id,
+                "client_name": session.get("client_name", ""),
+                "hostname": session.get("hostname", ""),
+                "os": session.get("os", ""),
+                "os_version": session.get("os_version", ""),
+                "arch": session.get("arch", ""),
+                "client_version": session.get("client_version", ""),
+                "ip": ip,
+                "login_time": session.get("login_time", 0),
+                "last_heartbeat": session.get("last_heartbeat", 0),
+                "proxy_count": len(session.get("proxies", set())),
+            })
+        return clients
 
     async def handle_close(self, message):
         conn_id = message.payload.get("conn_id")
@@ -1711,37 +1801,77 @@ class FRPServer:
                 self.close_stcp_conn(conn_id)
 
     async def handle_webapi(self, reader, writer):
-        """简易 HTTP WebAPI：返回统计 JSON"""
+        """简易 HTTP WebAPI：返回统计 JSON、客户端列表、远程命令。"""
         try:
-            data = await asyncio.wait_for(reader.read(4096), timeout=5)
+            data = await asyncio.wait_for(reader.read(65536), timeout=10)
             request = data.decode("utf-8", errors="ignore")
-            path = request.split(" ")[1] if " " in request else "/"
+            lines = request.split("\r\n")
+            first_line = lines[0] if lines else ""
+            parts = first_line.split(" ")
+            method = parts[0] if len(parts) > 0 else "GET"
+            path = parts[1] if len(parts) > 1 else "/"
+
+            # 解析 body（仅对 POST/PUT）
+            body = b""
+            if method in ("POST", "PUT"):
+                content_length = 0
+                for line in lines[1:]:
+                    if line.lower().startswith("content-length:"):
+                        try:
+                            content_length = int(line.split(":", 1)[1].strip())
+                        except ValueError:
+                            pass
+                        break
+                if content_length > 0:
+                    # 找到 body 起始
+                    header_end = request.find("\r\n\r\n")
+                    if header_end >= 0:
+                        body_start = header_end + 4
+                        body = data[body_start:body_start + content_length]
+
+            status_code = 200
+            resp_body = b""
 
             if path == "/" or path == "/stats":
-                body = json_module.dumps(
+                resp_body = json_module.dumps(
                     self.stats.get_all_stats(), indent=2, ensure_ascii=False
                 ).encode("utf-8")
-                response = (
-                    f"HTTP/1.1 200 OK\r\n"
-                    f"Content-Type: application/json\r\n"
-                    f"Content-Length: {len(body)}\r\n"
-                    f"Connection: close\r\n"
-                    f"\r\n"
-                ).encode("utf-8") + body
+            elif path == "/clients":
+                clients = self.list_clients()
+                resp_body = json_module.dumps(
+                    {"clients": clients}, indent=2, ensure_ascii=False
+                ).encode("utf-8")
+            elif path.startswith("/clients/") and path.endswith("/cmd") and method == "POST":
+                # POST /clients/{session_id}/cmd
+                session_id = path.split("/")[2]
+                try:
+                    req_data = json_module.loads(body.decode("utf-8")) if body else {}
+                except (json_module.JSONDecodeError, UnicodeDecodeError):
+                    req_data = {}
+                cmd = req_data.get("cmd", "")
+                args = req_data.get("args", {})
+                timeout = req_data.get("timeout", 30)
+                result = await self.send_remote_cmd(session_id, cmd, args, timeout)
+                resp_body = json_module.dumps(result, indent=2, ensure_ascii=False).encode("utf-8")
             else:
-                body = b'{"error": "not found"}'
-                response = (
-                    f"HTTP/1.1 404 Not Found\r\n"
-                    f"Content-Type: application/json\r\n"
-                    f"Content-Length: {len(body)}\r\n"
-                    f"Connection: close\r\n"
-                    f"\r\n"
-                ).encode("utf-8") + body
+                status_code = 404
+                resp_body = b'{"error": "not found"}'
+
+            response = (
+                f"HTTP/1.1 {status_code} {'OK' if status_code == 200 else 'Not Found'}\r\n"
+                f"Content-Type: application/json\r\n"
+                f"Content-Length: {len(resp_body)}\r\n"
+                f"Access-Control-Allow-Origin: *\r\n"
+                f"Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+                f"Access-Control-Allow-Headers: Content-Type\r\n"
+                f"Connection: close\r\n"
+                f"\r\n"
+            ).encode("utf-8") + resp_body
 
             writer.write(response)
             await writer.drain()
         except Exception as e:
-            self.logger.debug(f"Dashboard error: {e}")
+            self.logger.debug(f"WebAPI error: {e}")
         finally:
             writer.close()
             await writer.wait_closed()
