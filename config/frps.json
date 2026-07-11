@@ -1,0 +1,17 @@
+{
+    "bind_port": 7000,
+    "bind_addr": "0.0.0.0",
+    "log_level": "info",
+    "auth_token": "my-secret-token-123",
+    "max_connections": 1000,
+    "idle_timeout": 300,
+    "tls": true,
+    "tls_cert_file": "server.crt",
+    "tls_key_file": "server.key",
+    "webapi_port": 7501,
+    "webapi_addr": "127.0.0.1",
+    "allow_ports": "7000-9099,30000-40000",
+    "ip_blacklist": null,
+    "vhost_http_port": 9090,
+    "forward_proxy_port": 9091
+}

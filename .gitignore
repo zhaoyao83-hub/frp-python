@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Node.js
+webadmin/app/node_modules/
+webadmin/app/dist/
+webadmin/app/.vite/
+
+# 敏感文件 — 不要提交到公开仓库
+server.key
+server.crt
+config/webadmin.json
+
+# 日志
+logs/*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# MCP 配置（可能含 token）
+github-mcp-config.json
+
+# TypeScript 构建缓存
+*.tsbuildinfo
