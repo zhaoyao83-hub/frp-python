@@ -15,6 +15,10 @@ webadmin/app/.vite/
 # 敏感文件 — 不要提交到公开仓库
 server.key
 server.crt
+
+# 实际配置文件（含密钥/token，使用 *.example.json 作为样例）
+config/frps.json
+config/frpc.json
 config/webadmin.json
 
 # 日志

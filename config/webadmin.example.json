@@ -1,0 +1,19 @@
+{
+    "host": "0.0.0.0",
+    "port": 7500,
+    "secret_key": "CHANGE-ME-TO-A-RANDOM-UUID",
+    "token_expire_minutes": 720,
+    "auto_restart": false,
+    "frps_config_path": "config/frps.json",
+    "frpc_config_path": "config/frpc.json",
+    "log_buffer_lines": 1000,
+    "file_manager_roots": ["config", "logs"],
+    "users": [
+        {
+            "username": "admin",
+            "password_hash": "RUN: python3 -c \"from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt'], deprecated='auto').hash('admin123'))\"",
+            "role": "admin",
+            "must_change_password": true
+        }
+    ]
+}

@@ -1,0 +1,50 @@
+{
+    "server_addr": "127.0.0.1",
+    "server_port": 7000,
+    "log_level": "info",
+    "log_file": null,
+    "auth_token": "change-me-to-a-random-string",
+    "reconnect": true,
+    "reconnect_max_retries": 5,
+    "reconnect_base_delay": 1,
+    "reconnect_max_delay": 30,
+    "tls": false,
+    "tls_insecure": false,
+    "tls_ca_file": null,
+    "data_port": null,
+    "proxies": [
+        {
+            "name": "web",
+            "type": "tcp",
+            "local_ip": "127.0.0.1",
+            "local_port": 8080,
+            "remote_port": 8080,
+            "enabled": true
+        },
+        {
+            "name": "ssh",
+            "type": "tcp",
+            "local_ip": "127.0.0.1",
+            "local_port": 22,
+            "remote_port": 7022,
+            "enabled": true
+        },
+        {
+            "name": "http-site",
+            "type": "http",
+            "local_ip": "127.0.0.1",
+            "local_port": 8080,
+            "custom_domains": ["example.com"],
+            "subdomain": "app",
+            "enabled": true
+        },
+        {
+            "name": "secret-service",
+            "type": "stcp",
+            "local_ip": "127.0.0.1",
+            "local_port": 22,
+            "sk": "shared-secret-key",
+            "enabled": true
+        }
+    ]
+}
